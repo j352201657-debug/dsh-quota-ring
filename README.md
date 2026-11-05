@@ -25,13 +25,23 @@ DSH Web UI 额度展示插件。在右下角显示悬浮圆环，点击查看 De
 
 需要带 Web UI 和 `webServer` 服务的 DSH，以及 Node.js 18 或更高版本。
 
-在 DSH 使用的终端中执行：
+### DSH 桌面版
+
+通过桌面应用提供的插件安装入口安装，仓库地址为：
+
+    https://github.com/j352201657-debug/dsh-quota-ring
+
+`desktop` 是桌面应用保留的 profile，由桌面安装器管理。普通独立 CLI 不接受对该 profile 的安装命令。
+
+### 独立 Web 版
+
+在已提供 `dsh` 命令的终端中执行：
 
 ```bash
-dsh plugin --profile desktop add https://github.com/j352201657-debug/dsh-quota-ring
+dsh plugin --profile web add https://github.com/j352201657-debug/dsh-quota-ring
 ```
 
-使用独立 Web profile 时，将 `desktop` 替换为 `web`。安装后重启对应的 DSH 实例。
+安装后重启对应的 DSH 实例。
 
 | 平台 | 登录与组件要求 |
 |---|---|

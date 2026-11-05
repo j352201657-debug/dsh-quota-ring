@@ -25,13 +25,23 @@ Money and percentage limits are displayed separately. Missing values are not tre
 
 Requires DSH with the Web UI and `webServer` service, and Node.js 18 or later.
 
-Run in the terminal used for DSH:
+### DSH Desktop
+
+Use the plugin installation entry point provided by the desktop application, with this repository URL:
+
+    https://github.com/j352201657-debug/dsh-quota-ring
+
+The `desktop` profile is reserved for the desktop application and managed by its installer. The standalone CLI rejects plugin installation commands for that profile.
+
+### Standalone Web profile
+
+Run in a terminal where the `dsh` command is available:
 
 ```bash
-dsh plugin --profile desktop add https://github.com/j352201657-debug/dsh-quota-ring
+dsh plugin --profile web add https://github.com/j352201657-debug/dsh-quota-ring
 ```
 
-For a separate Web profile, replace `desktop` with `web`. Restart the matching DSH instance after installation.
+Restart the matching DSH instance after installation.
 
 | Provider | Login requirements |
 |---|---|

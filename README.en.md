@@ -39,6 +39,14 @@ This plugin reads those three chains directly and renders them together, without
 
 ## Install
 
+### Option A: let DSH install it
+
+```bash
+dsh plugin --profile web add https://github.com/j352201657-debug/dsh-quota-ring
+```
+
+### Option B: place it in the profile manually
+
 ```powershell
 $profile = "D:\DSHData\.dsh\profiles\desktop"   # your profile path
 Copy-Item -Recurse -Force .\dsh-quota-ring "$profile\node_modules\dsh-quota-ring"
@@ -114,11 +122,11 @@ It answers: was the credentials file found (`credentialsFile`, `triedHomes`), di
 | **GPT** | `dsh-codex-subscription` | `GET https://chatgpt.com/backend-api/wham/usage`, headers `authorization: Bearer <access>` + `chatgpt-account-id` (OAuth from `.credentials.yaml`) | `rate_limit.primary_window` (5h) / `secondary_window` (weekly), `used_percent` |
 | **Gemini** | `dsh-agy-cli` | `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` using the read-only token from Windows Credential Manager (`gemini:antigravity`); falls back to `GET /plugins/agy-cli/status` | three groups / five buckets, `remainingFraction` |
 
-### Why Gemini's 5-hour window used to be "unknown"
+### Gemini quota pools
 
 Antigravity reports **three groups, five buckets** (`gemini-weekly` + `gemini-5h`, `3p-weekly` + `3p-5h`, `gemini-argon-wtu-weekly`). `dsh-agy-cli` flattens them into three families and lets *later groups overwrite earlier ones* — `Gemini 4 Argon` has no 5h bucket, so it overwrites the `gemini-5h` from `Gemini Models`, and `google.fiveHourUnknown` is permanently `true`.
 
-The quota was always there; it was dropped in transit. This plugin reads the raw endpoint and renders groups as-is, falling back to the flattened data only when the token is missing/expired or the call fails — and then says so in a note.
+The quota is always present; it is dropped in transit. This plugin reads the raw endpoint and renders groups as-is, falling back to the flattened data only when the token is missing/expired or the call fails — and then marks the source in a note.
 
 ### DeepSeek peak / off-peak
 
@@ -259,6 +267,24 @@ Start with `/api/quota-hub/diag`. Then:
 | All rows time out | proxy is required but not detected | set `proxy`, or `HTTPS_PROXY`, then restart DSH |
 
 `QH_DEBUG=1` prints the real upstream error to stderr (never secrets).
+
+## Implementation constraints (read before changing code)
+
+1. **Never slice the DeepSeek token by a character class.** It is base64-like and contains `/` and `+`; `[A-Za-z0-9._-]` truncates it around character 25 and the server answers `{"code":40003,"msg":"Authorization Failed (invalid token)"}`. Take everything after the colon on that line, then strip quotes.
+2. **Node honours no system proxy.** A manual CONNECT tunnel is required, otherwise `chatgpt.com` hangs until timeout.
+3. **`records` in `.credentials.yaml` is an object, not an array.** The list lives inside `codex-subscription/accounts` → `accounts`, each entry with a nested `credential`.
+4. **An unknown percentage is not 100%.** `fiveHourUnknown: true` must render as "unknown", never `1.0`.
+5. **`credits.balance = '0'` is not a balance.** Under a subscription plan that field is always zero.
+6. **`0E-16` is a valid zero.** Wallet amounts may come back in scientific notation.
+7. **`Number(null) === 0` and finite.** Rounding percentages on `Number.isFinite` alone silently turns an unknown window into "0% remaining"; `round2()` in `src/shape.js` excludes `null` / `undefined` / empty string first.
+8. **agy-cli's `/status` loses quota groups.** Later groups overwrite earlier ones, so `gemini-5h` is dropped. Read `retrieveUserQuotaSummary` directly.
+9. **The raw endpoint needs the full CLI identity headers.** With a short `User-Agent`, the daily endpoint omits the Gemini group entirely. Send `antigravity/cli/1.4.2 (...)` plus the matching `X-Goog-Api-Client`.
+10. **A 401 after token rotation needs one forced retry.** `/status` can trigger renewal, leaving a stale token in the 30 s cache; re-read the token on 401/403 and only then fall back.
+11. **Do not hard-code the port.** The DSH Web port changes on every restart; with `dshWebPort: 0`, skip port-dependent calls instead of guessing. The raw Gemini quota API does not need the port at all, so a `/status` failure must not abort the fetch.
+12. **Do not hard-code the data directory.** Walk up from `__dirname` looking for `.credentials.yaml`.
+13. **Windows credential reads need `-Command "& { … } <target>`.** Feeding the script through `-Command -` silently returns nothing with exit code 0.
+14. **`.dshw-usage.json` is not authoritative.** It can stop updating and its `lastBalance` ignores top-ups; use it only as the ledger seed.
+15. **Accumulate response bodies as Buffers.** Per-chunk `toString('utf8')` splits multi-byte CJK characters; locate the header/body boundary with `buf.indexOf('\r\n\r\n')`.
 
 ## License
 

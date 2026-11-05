@@ -509,14 +509,14 @@ node preview/build-preview.cjs            # 生成 preview/preview.html
 
 ### 1. 补齐 manifest（发布前必做）
 
-`package.json` 里已有 `engines.dsh`、`publishConfig`，但 `repository` / `author` / `homepage` 得换成你自己的地址：
+`package.json` 里已有 `engines.dsh`、`publishConfig`，但 `repository` / `author` / `homepage` 得换成你自己的地址（本仓库已填好，fork 后请替换）：
 
 ```json
 {
-  "repository": { "type": "git", "url": "git+https://github.com/<你的用户名>/dsh-quota-ring.git" },
-  "homepage": "https://github.com/<你的用户名>/dsh-quota-ring#readme",
-  "bugs": { "url": "https://github.com/<你的用户名>/dsh-quota-ring/issues" },
-  "author": "<你的名字>"
+  "repository": { "type": "git", "url": "git+https://github.com/j352201657-debug/dsh-quota-ring.git" },
+  "homepage": "https://github.com/j352201657-debug/dsh-quota-ring#readme",
+  "bugs": { "url": "https://github.com/j352201657-debug/dsh-quota-ring/issues" },
+  "author": "Chen Yang Ji"
 }
 ```
 
@@ -527,7 +527,7 @@ node preview/build-preview.cjs            # 生成 preview/preview.html
 npm publish          # 已是 public 包名，publishConfig.access 已设为 public
 
 # B. 只有 GitHub：打 tag + Release，别人用 git 地址装
-dsh plugin --profile web add https://github.com/<你的用户名>/dsh-quota-ring
+dsh plugin --profile web add https://github.com/j352201657-debug/dsh-quota-ring
 ```
 
 ### 3. 向 awesome-dsh-plugin 提 PR（加一行）
@@ -535,7 +535,7 @@ dsh plugin --profile web add https://github.com/<你的用户名>/dsh-quota-ring
 在 `README.md` 的 `<!-- BEGIN PLUGINS -->` 区、**Usage & Billing** 分类下按字母序插入一行（一行 = 一条记录，描述用英文一句话、写清楚行为）：
 
 ```markdown
-- [<你的用户名>/dsh-quota-ring](https://github.com/<你的用户名>/dsh-quota-ring) - Floating quota ring in the DSH Web UI for DeepSeek, GPT (Codex) and Gemini accounts: remaining and used amounts, DeepSeek peak/off-peak schedule with today's spend, Gemini's three Antigravity quota pools, plus 10-minute polling with idle backoff.
+- [j352201657-debug/dsh-quota-ring](https://github.com/j352201657-debug/dsh-quota-ring) - Floating quota ring in the DSH Web UI for DeepSeek, GPT (Codex) and Gemini accounts: remaining and used amounts, DeepSeek peak/off-peak schedule with today's spend, Gemini's three Antigravity quota pools, plus 10-minute polling with idle backoff.
 ```
 
 审核看三件事：能 `dsh plugin add` 装上、描述与实际行为一致、分类正确。收录通常一天内生效，之后市场与 Discover 会自动出现，不需要再改本仓库任何代码。
@@ -545,7 +545,7 @@ dsh plugin --profile web add https://github.com/<你的用户名>/dsh-quota-ring
 未上架之前，别人可以这样装（等价于本 README「安装」一节的手动步骤）：
 
 ```bash
-dsh plugin --profile web add https://github.com/<你的用户名>/dsh-quota-ring
+dsh plugin --profile web add https://github.com/j352201657-debug/dsh-quota-ring
 # 或本地目录
 dsh plugin --profile web add D:\path\to\dsh-quota-ring
 ```

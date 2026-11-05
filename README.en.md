@@ -4,287 +4,166 @@
 ![DSH](https://img.shields.io/badge/DSH-Web%20UI%20plugin-2563eb.svg)
 ![Node](https://img.shields.io/badge/node-%E2%89%A518-3c873a.svg)
 
-**DeepSeek, GPT (Codex) and Gemini quotas, in one ring at the bottom-right of DSH.**
-
-The ring's arc shows the *tightest* percentage window across all providers. Click it to expand a card with remaining / used / reset countdowns per provider, plus DeepSeek peak/off-peak timing and today's spend. Polling defaults to 10 minutes with debounce and idle back-off; a provider that fails only degrades its own row.
+A quota widget for the DSH Web UI. A floating ring opens a card with DeepSeek balances, Codex subscription limits and Antigravity quota groups.
 
 [中文说明](./README.md)
 
-![quota card](preview/card-final.png)
-
----
-
-## Why
-
-In DSH these three quotas come from three completely different places, and none of them is "paste an API key and read a balance":
-
-| | Where the quota lives | What the quota *is* |
-|---|---|---|
-| DeepSeek | DSH account login (grant token in `.credentials.yaml`) | **real money** (CNY/USD) |
-| GPT (Codex) | Codex subscription plugin's OAuth session | **percentage rate windows** (5h + weekly) |
-| Gemini | Antigravity CLI login (Windows Credential Manager) | **percentage rate windows** (3 pools × weekly/5h) |
-
-This plugin reads those three chains directly and renders them together, without ever mixing their semantics (see [Semantic honesty](#semantic-honesty)).
+![Quota card](preview/card-final.png)
 
 ## Features
 
-- **Floating ring**: arc = lowest remaining percentage; center shows that number, or `¥` when only money is known, or `!` on errors. Click to expand.
-- **Three providers at once**: DeepSeek remaining/used/today spend/peak-off-peak bar; GPT's two windows; Gemini's three quota pools (five windows) with reset countdowns.
-- **DeepSeek peak hours**: the day is sliced into 15-minute segments drawn as an orange (peak) / blue (off-peak) bar with a dark "now" tick and copy like `平价 · 11 小时 53 分后进入高峰`.
-- **DeepSeek today's spend**: there is no official per-day figure, so the plugin ledgers it from balance deltas, recognises top-ups, survives restarts, and archives daily.
-- **Per-provider degradation**: concurrent fetches, per-provider timeouts and fallbacks.
-- **Three layers of request protection**: 60 s server cache + 600 ms debounce / 3 s rate limit + idle back-off or pause.
-- **Read-only and offline**: reads local DSH credentials, talks only to the three official hosts, never logs or persists secrets, no telemetry.
-- **No frontend framework**: the client is plain DOM in a single file — no React / react-dom dependency.
+- The ring shows the lowest remaining percentage among known quota windows.
+- DeepSeek shows wallet balance, cumulative spend, estimated daily spend and peak/off-peak timing.
+- GPT (Codex) shows the rate windows and reset times reported for the account.
+- Gemini shows the quota groups returned by Antigravity. Available groups vary by account and upstream response.
+- Providers are queried independently. A failed provider does not hide other results.
+- Polling defaults to 10 minutes, with manual refresh, idle back-off and a server cache.
 
-## Install
+Money and percentage limits are displayed separately. Missing values are not treated as zero or full quota.
 
-### Option A: let DSH install it
+## Installation
+
+Requires DSH with the Web UI and `webServer` service, and Node.js 18 or later.
+
+Run in the terminal used for DSH:
 
 ```bash
-dsh plugin --profile web add https://github.com/j352201657-debug/dsh-quota-ring
+dsh plugin --profile desktop add https://github.com/j352201657-debug/dsh-quota-ring
 ```
 
-### Option B: place it in the profile manually
+For a separate Web profile, replace `desktop` with `web`. Restart the matching DSH instance after installation.
 
-```powershell
-$profile = "D:\DSHData\.dsh\profiles\desktop"   # your profile path
-Copy-Item -Recurse -Force .\dsh-quota-ring "$profile\node_modules\dsh-quota-ring"
-```
+| Provider | Login requirements |
+|---|---|
+| DeepSeek | Sign in through DSH's built-in DeepSeek account component |
+| GPT (Codex) | Install `dsh-codex-subscription` and sign in |
+| Gemini | Install `dsh-agy-cli` and authorize an Antigravity account |
 
-Add to `$profile/package.json` → `dependencies`:
+Raw Gemini quotas require Windows Credential Manager. Other platforms use the AGY status fallback, which may omit some windows. Each provider needs a valid login to display its quotas.
 
-```json
-"dsh-quota-ring": "file:./node_modules/dsh-quota-ring"
-```
+To uninstall, remove this plugin's dependency and registration entry from the matching profile, then restart DSH. Statistics remain in `dsh-quota-ring/usage-state.json` under the DSH data directory until removed separately.
 
-Append this package's `cordis.patch.yml` block to `$profile/cordis.patch.yml`:
+## Data and display
 
-```yaml
-- insert:
-    - id: quota-hub
-      name: 'dsh-quota-ring'
-      config:
-        refreshIntervalMs: 600000
-        idleMultiplier: 3
-        pauseWhenHidden: false
-        dshHome: ''
-        dshWebPort: 0
-        proxy: ''
-        serverCacheTtlMs: 60000
-        requestTimeoutMs: 15000
-        corsOrigins:
-          - 'http://127.0.0.1'
-          - 'http://localhost'
-        deepseekPeakWindows: null
-        deepseekPeakHolidays: null
-```
-
-Restart DSH (the client bundle is loaded at startup). The ring appears bottom-right; the first fetch takes ~2–5 s (Gemini reads the credential manager and opens TLS on that first call), then the 60 s cache takes over.
-
-### What must exist on the machine
-
-This plugin reads **DSH login sessions**, not API keys. Per provider:
-
-| Requirement | Provides | If missing |
+| Provider | Source | Unit |
 |---|---|---|
-| **DSH desktop** (Web UI + `webServer`) | host for the route and the client bundle | plugin never loads |
-| **`dsh-codex-subscription`**, signed in | GPT (Codex) OAuth credential (record `codex-subscription/accounts`) | GPT row shows "未登录" |
-| **`dsh-agy-cli`**, with `agy` logged in once | Gemini quotas (Windows Credential Manager `gemini:antigravity` + `/plugins/agy-cli/status`) | Gemini row shows "unavailable" |
-| DeepSeek account session (built into DSH: `dsh-deepseek-account-platform`) | balance and total spend (record `deepseek-account-platform/default`) | DeepSeek row shows "未登录" |
-| Node.js ≥ 18 | runtime (no third-party deps) | server does not start |
+| DeepSeek | `platform.deepseek.com/api/v0/users/get_user_summary` | Wallet currency |
+| GPT (Codex) | `chatgpt.com/backend-api/wham/usage` | Remaining rate-window percentage |
+| Gemini | `daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`, falling back to local `/plugins/agy-cli/status` | Remaining quota-group percentage |
 
-> **In one line**: GPT and Gemini work **as long as those two plugins are installed and signed in** — `dsh-codex-subscription` and `dsh-agy-cli`. If either plugin (or its credential record names) differs, adjust the corresponding reader in `src/credentials.js` / `src/adapters/agy.js`.
+These endpoints are not a stable public protocol defined by this plugin. Changes to upstream fields or authentication can break queries. The AGY fallback may contain fewer groups than the raw endpoint.
 
-### Portability notes
+### Daily spend
 
-| Concern | How it is handled |
-|---|---|
-| Data dir is not `D:\DSHData\.dsh` | `dshHome` empty → tries `DSH_HOME` / `DSH_DATA_DIR` → **walks up from the plugin's own install path looking for `.credentials.yaml`** → `D:\DSHData\.dsh` → `~/.dsh` |
-| Web port changes on every restart | inferred from the request `Host` header (`dshWebPort: 0`) |
-| Different user name / home | only `os.homedir()` and relative paths; no absolute path or user name in code |
-| Different proxy setup | `proxy` empty → env vars → Windows registry → direct |
-| Upstream record renamed in a DSH update | falls back to fuzzy matching (records whose name contains `deepseek` / `codex` and contain `token` / `access`) |
+Spend is estimated from balance observations: decreases count as spend, increases as top-ups. Records use UTC+8 calendar days, retain 30 days of history and persist across restarts.
 
-### Self-check first
+Tracking starts with the first observation. A same-day `.dshw-usage.json` record can provide an initial value. The card displays the start time when known.
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:<port>/api/quota-hub/diag | ConvertTo-Json -Depth 6
-```
+A top-up and spending between two observations can only be recorded as a net change. This estimate is not an official billing statement.
 
-It answers: was the credentials file found (`credentialsFile`, `triedHomes`), did both account records parse (`deepseek.ok`, `codex.ok`, `codex.expired`), are the two dependency plugins installed (`plugins[].installed` + versions), and which platform capabilities are degraded (`runtime.note`). `tips` holds the next actions. It makes **no network calls** and never echoes secrets.
+### Peak/off-peak timing
 
-## How quotas are fetched
+Built-in reference windows are UTC 01:00–04:00 and 06:00–10:00, corresponding to 09:00–12:00 and 14:00–18:00 in Beijing. Weekends and the built-in 2026 holiday table affect the calculation.
 
-| Provider | DSH component | Request | Shape |
-|---|---|---|---|
-| **DeepSeek** | `dsh-deepseek-account-platform` | `GET https://platform.deepseek.com/api/v0/users/get_user_summary`, header `x-dsh-auth-token` (grant token from `.credentials.yaml`) | money, CNY/USD, remaining **and** used |
-| **GPT** | `dsh-codex-subscription` | `GET https://chatgpt.com/backend-api/wham/usage`, headers `authorization: Bearer <access>` + `chatgpt-account-id` (OAuth from `.credentials.yaml`) | `rate_limit.primary_window` (5h) / `secondary_window` (weekly), `used_percent` |
-| **Gemini** | `dsh-agy-cli` | `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` using the read-only token from Windows Credential Manager (`gemini:antigravity`); falls back to `GET /plugins/agy-cli/status` | three groups / five buckets, `remainingFraction` |
-
-### Gemini quota pools
-
-Antigravity reports **three groups, five buckets** (`gemini-weekly` + `gemini-5h`, `3p-weekly` + `3p-5h`, `gemini-argon-wtu-weekly`). `dsh-agy-cli` flattens them into three families and lets *later groups overwrite earlier ones* — `Gemini 4 Argon` has no 5h bucket, so it overwrites the `gemini-5h` from `Gemini Models`, and `google.fiveHourUnknown` is permanently `true`.
-
-The quota is always present; it is dropped in transit. This plugin reads the raw endpoint and renders groups as-is, falling back to the flattened data only when the token is missing/expired or the call fails — and then marks the source in a note.
-
-### DeepSeek peak / off-peak
-
-| | Rule |
-|---|---|
-| Peak | **UTC** `01:00–04:00` and `06:00–10:00` = **09:00–12:00, 14:00–18:00 Beijing** |
-| Weekends | All day off-peak (Beijing Sat/Sun) |
-| Holidays | All day off-peak (2026 schedule built in, overridable) |
-| Precedence | Weekends/holidays beat peak windows |
-| Effective from | `2026-08-16T16:00:00Z` |
-
-### DeepSeek today's spend
-
-No official per-day figure exists, so the plugin ledgers it:
-
-```
-today = opening balance + top-ups − current balance
-```
-
-Balance drops are spend, balance jumps are top-ups (so a mid-day top-up never produces negative spend). State lives in `$DSH_HOME/dsh-quota-ring/usage-state.json`, survives restarts, archives daily for 30 days. On first install it seeds from DSH's own `.dshw-usage.json` when that file has a same-day record, and labels the window as `（自 20:11 起）` when the ledger didn't start at midnight.
-
-### Semantic honesty
-
-DeepSeek is **money**; GPT and Gemini are **percentage rate windows**. The footer therefore reports two independent conclusions rather than a fake total:
-
-```
-可用余额 ¥15.03（DeepSeek）
-最紧窗口 49% 剩余（GPT (Codex) · 5小时窗口）
-```
-
-No currency conversion — turning "60% remaining" into dollars would be false precision.
-
-An unknown window renders as **未知** with an empty grey bar, never as `1.0`. A depleted account showing "100% remaining" would be the worst possible lie.
+Windows and holiday dates are configurable. These hints do not calculate official charges; current platform rules and bills take precedence.
 
 ## Configuration
 
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `refreshIntervalMs` | number | `600000` | Poll period (ms), min 5000 |
-| `idleMultiplier` | number | `3` | Period multiplier while unfocused |
-| `pauseWhenHidden` | boolean | `false` | `true` pauses polling while hidden |
-| `dshHome` | string | `''` | DSH data dir containing `.credentials.yaml`; auto-detected when empty |
-| `dshWebPort` | number | `0` | DSH Web port for agy-cli; `0` infers it from the request Host header (recommended, it changes per restart) |
-| `proxy` | string | `''` | e.g. `http://127.0.0.1:12450`; auto-detected when empty |
-| `serverCacheTtlMs` | number | `60000` | Aggregation cache; `0` disables |
-| `requestTimeoutMs` | number | `15000` | Per-provider timeout |
-| `corsOrigins` | string[] | loopback origins | CORS allow-list; loopback hosts are always allowed |
-| `deepseekPeakWindows` | array \| null | `null` | Override peak windows (UTC hours, half-open) |
-| `deepseekPeakHolidays` | string[] \| null | `null` | Override holiday dates |
+Settings belong in this plugin's `config` entry in the matching profile.
 
-**Credential dir order**: `DSH_HOME` → `DSH_DATA_DIR` → `D:\DSHData\.dsh` → `~/.dsh`.
+| Field | Default | Purpose |
+|---|---|---|
+| `refreshIntervalMs` | `600000` | Client polling interval in ms; minimum 5000 |
+| `idleMultiplier` | `3` | Interval multiplier while unfocused |
+| `pauseWhenHidden` | `false` | Pause polling when the page is hidden |
+| `dshHome` | `''` | DSH data directory; empty enables discovery |
+| `dshWebPort` | `0` | AGY status port; 0 infers it from the request Host |
+| `proxy` | `''` | HTTP or HTTPS proxy; empty enables discovery |
+| `serverCacheTtlMs` | `60000` | Server cache duration in ms; 0 disables caching |
+| `requestTimeoutMs` | `15000` | Timeout per upstream request in ms |
+| `corsOrigins` | Loopback origins | CORS allow-list; loopback hosts also accept any port |
+| `deepseekPeakWindows` | `null` | UTC peak windows, e.g. `[{start:1,end:4},{start:6,end:10}]` |
+| `deepseekPeakHolidays` | `null` | UTC+8 holiday dates, e.g. `['2026-10-01']` |
 
-**Proxy order**: `config.proxy` → `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` env → Windows registry `Internet Settings\ProxyServer` → direct. Loopback is always direct.
+Credential directories are checked in this order:
 
-> Node's `http`/`https` honour neither the Windows system proxy nor `HTTP(S)_PROXY` — without a manual CONNECT tunnel, `chatgpt.com` just hangs until timeout.
+1. `config.dshHome`.
+2. `DSH_HOME` and `DSH_DATA_DIR` environment variables.
+3. Ancestor directories of the installed plugin.
+4. `.dsh` in the user's home directory.
+
+Proxy discovery checks configuration, `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` environment variables, then Windows system proxy settings. Requests are direct if no proxy is found. Loopback requests are always direct.
+
+Concurrent quota queries share an in-flight request. Manual refresh bypasses the completed-result cache but reuses an ongoing query. Credentials are read again for each new upstream query, including after login or account changes.
 
 ## HTTP API
 
-`webServer.register({ kind: 'prefix', path: '/api/quota-hub' })`:
+The route prefix is `/api/quota-hub`. Access follows the DSH host's authentication and network settings.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/quota-hub/summary` | Aggregated quotas (cached) |
-| `GET` | `/api/quota-hub/summary?force=1` | Bypass cache |
-| `GET` | `/api/quota-hub/config` | Sanitised config (never contains secrets) |
-| `POST` | `/api/quota-hub/refresh` | Same as `summary?force=1` |
-| `GET` | `/api/quota-hub/diag` | Self-check: credentials file, parsed account records, dependency plugin versions, platform degradations. **No network, no secrets** |
+| GET | `/summary` | Aggregated quotas with caching |
+| GET | `/summary?force=1` | Bypass the completed-result cache |
+| POST | `/refresh` | Manual refresh |
+| GET | `/config` | Display settings; exposes only whether a proxy is configured |
+| GET | `/diag` | Local diagnostics without upstream quota requests |
 
-Each provider returns `{ id, label, status, kind: 'money' | 'percent', remaining, used, unit, windows[], groups[]?, notes[], message, ms }`, where `status` is one of `ok | unavailable | error | missing_key`. DeepSeek additionally returns `peak` (phase, next switch, 15-minute `segments` of the day) and `usage` (today, credits, source, history).
+Quota responses contain `providers`, `fetchedAt` and `health`. Provider status is `ok`, `missing_key`, `unavailable` or `error`. Detail fields include `windows` and, for Gemini, optional `groups`. DeepSeek also returns `peak` and `usage`.
 
-## Privacy & security
+The diagnostic details are under `diag` and include credential file paths, parsing results, dependency versions and suggested actions. Inspect diagnostics before sharing: they can contain local paths.
 
-- Credentials are **read-only** — never written back, never refreshed by this plugin, never persisted, never logged.
-- Only three official hosts are contacted (`platform.deepseek.com`, `chatgpt.com`, `daily-cloudcode-pa.googleapis.com`) plus the local `127.0.0.1` agy-cli status route.
-- `/config` returns sanitised values only (`proxyConfigured: boolean`).
-- All dynamic text is written with `textContent`, so upstream strings cannot inject markup.
+## Storage and privacy
 
-## Project layout
+- DeepSeek and Codex credentials are read from local `.credentials.yaml`.
+- Gemini access tokens are read from Windows Credential Manager. This plugin does not write or renew credentials; querying the AGY status endpoint can trigger AGY's own renewal logic.
+- Quota queries require network access to the services above and any configured proxy. The DeepSeek request origin also follows the credential's `issuer` field.
+- Daily-spend estimates are saved in local `usage-state.json`. Generating a preview saves a quota snapshot.
+- The project has no telemetry reporting logic. Dynamic widget text is written with `textContent`.
 
-```
-dsh-quota-ring/
-├── package.json        # main / exports / dsh.bundle.patch / dsh.client
-├── cordis.patch.yml    # registers the plugin into the profile
-├── index.js            # server: /api/quota-hub/* routes (CommonJS)
-├── client.js           # client: ring + card + peak bar (plain DOM)
-├── src/
-│   ├── config.js       # defaults / normalisation / sanitising
-│   ├── credentials.js  # .credentials.yaml: DeepSeek grant + Codex OAuth
-│   ├── keyring.js      # read-only Windows Credential Manager access
-│   ├── http.js         # GET/POST + CONNECT proxy tunnel + system proxy discovery
-│   ├── shape.js        # shared result shape + time/percent helpers
-│   ├── peak.js         # DeepSeek peak/off-peak evaluation + segments
-│   ├── usage.js        # DeepSeek daily spend ledger
-│   ├── aggregator.js   # concurrent fan-out + TTL cache + isolation
-│   └── adapters/       # deepseek.js | codex.js | agy.js (+ registry)
-├── preview/            # offline preview harness (dev only)
-└── selftest-v3.cjs     # peak + ledger self-tests
+## Development and tests
+
+The server uses CommonJS; the client uses plain DOM. No build step is required.
+
+```bash
+npm test
+node --check client.js
+node --check index.js
 ```
 
-Adding a fourth provider means one `adapters/xxx.js` exporting `{ id, label, fetch(credentials, config, runtime) }` and one line in `adapters/index.js`.
+`npm test` runs offline regression tests using temporary directories and local test servers. It does not read real credentials or call provider quota APIs. Failures return a nonzero exit code.
 
-## Development
+To generate a preview with local account data:
 
-```powershell
-Get-ChildItem -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }
-node selftest-v3.cjs
-node preview/build-preview.cjs    # then open preview/preview.html
+```bash
+node preview/build-preview.cjs
 ```
 
-The preview page stubs `window.fetch` and `window.__ModuleLoader__.load` and injects real `/summary` data, so rendering can be verified without restarting DSH.
+Open the generated `preview/preview.html`. This command queries real quotas and updates local daily-spend statistics. The preview uses a static snapshot. Inspect generated files before publishing; masking is not a substitute for review.
 
-## Known limitations
+Source layout:
 
-- Upstream endpoints for GPT and Antigravity are unofficial; if they change shape the row degrades to `error` / `unavailable` instead of inventing numbers.
-- Gemini needs `dsh-agy-cli` / an Antigravity login.
-- Platform differences (the other two rows are unaffected):
-
-  | Capability | Windows | macOS / Linux |
-  |---|---|---|
-  | Gemini raw quota API (all three pools) | yes (PowerShell + `advapi32!CredRead` on `gemini:antigravity`) | no → falls back to agy-cli `/status`, so the **5-hour window may show "unknown"** |
-  | System proxy discovery | reads `Internet Settings` | env vars / explicit `proxy` only |
-  | DeepSeek, GPT, peak hours, today's spend | yes | yes |
-- DeepSeek "today" is an inference from balance deltas, not an official statement; a top-up and spend between two polls can only be netted.
-- The holiday table is 2026; override it for later years.
-- The DSH Web port changes on restart — don't hard-code it.
+- `index.js`: routes and host lifecycle.
+- `client.js`: ring, card and refresh interactions.
+- `src/aggregator.js`: in-flight requests, cache and provider isolation.
+- `src/adapters/`: provider requests and response parsing.
+- `src/credentials.js` and `src/keyring.js`: credential readers.
+- `src/http.js`: HTTP, proxies, timeouts and response parsing.
+- `src/peak.js` and `src/usage.js`: timing hints and spend estimates.
+- `tests/`: offline regression tests.
 
 ## Troubleshooting
 
-Start with `/api/quota-hub/diag`. Then:
+| Symptom | Check |
+|---|---|
+| Ring is missing | Installation profile, registration entry and DSH startup logs |
+| Not signed in | Provider login and parsing results in `/diag` |
+| Old login state remains | Refresh and confirm that the DSH login component saved new credentials |
+| Gemini is unavailable | AGY authorization, plugin state and DSH Web port |
+| Some Gemini windows are missing | Whether the AGY status fallback is in use |
+| Requests time out | Network and `proxy` configuration |
+| Peak/off-peak hints are outdated | Window and holiday settings |
 
-| Symptom | Likely cause | Action |
-|---|---|---|
-| No ring at all | plugin not loaded | check the DSH log for `dsh-quota-ring`; verify the `- insert:` entry; **restart DSH** |
-| Every row says "未登录" | no login on this machine | check `deepseek.ok` / `codex.ok` / `plugins[].installed` in `/diag` |
-| GPT row: 401 | OAuth access expired | sign in again in `dsh-codex-subscription` (`codex.expired` is `true`) |
-| Gemini row: unavailable | `dsh-agy-cli` missing, or port not inferred | install it and run `agy` once, or set `dshWebPort` |
-| Gemini 5-hour window "unknown" | flattened `/status` fallback | expected on non-Windows (see limitations) |
-| All rows time out | proxy is required but not detected | set `proxy`, or `HTTPS_PROXY`, then restart DSH |
-
-`QH_DEBUG=1` prints the real upstream error to stderr (never secrets).
-
-## Implementation constraints (read before changing code)
-
-1. **Never slice the DeepSeek token by a character class.** It is base64-like and contains `/` and `+`; `[A-Za-z0-9._-]` truncates it around character 25 and the server answers `{"code":40003,"msg":"Authorization Failed (invalid token)"}`. Take everything after the colon on that line, then strip quotes.
-2. **Node honours no system proxy.** A manual CONNECT tunnel is required, otherwise `chatgpt.com` hangs until timeout.
-3. **`records` in `.credentials.yaml` is an object, not an array.** The list lives inside `codex-subscription/accounts` → `accounts`, each entry with a nested `credential`.
-4. **An unknown percentage is not 100%.** `fiveHourUnknown: true` must render as "unknown", never `1.0`.
-5. **`credits.balance = '0'` is not a balance.** Under a subscription plan that field is always zero.
-6. **`0E-16` is a valid zero.** Wallet amounts may come back in scientific notation.
-7. **`Number(null) === 0` and finite.** Rounding percentages on `Number.isFinite` alone silently turns an unknown window into "0% remaining"; `round2()` in `src/shape.js` excludes `null` / `undefined` / empty string first.
-8. **agy-cli's `/status` loses quota groups.** Later groups overwrite earlier ones, so `gemini-5h` is dropped. Read `retrieveUserQuotaSummary` directly.
-9. **The raw endpoint needs the full CLI identity headers.** With a short `User-Agent`, the daily endpoint omits the Gemini group entirely. Send `antigravity/cli/1.4.2 (...)` plus the matching `X-Goog-Api-Client`.
-10. **A 401 after token rotation needs one forced retry.** `/status` can trigger renewal, leaving a stale token in the 30 s cache; re-read the token on 401/403 and only then fall back.
-11. **Do not hard-code the port.** The DSH Web port changes on every restart; with `dshWebPort: 0`, skip port-dependent calls instead of guessing. The raw Gemini quota API does not need the port at all, so a `/status` failure must not abort the fetch.
-12. **Do not hard-code the data directory.** Walk up from `__dirname` looking for `.credentials.yaml`.
-13. **Windows credential reads need `-Command "& { … } <target>`.** Feeding the script through `-Command -` silently returns nothing with exit code 0.
-14. **`.dshw-usage.json` is not authoritative.** It can stop updating and its `lastBalance` ignores top-ups; use it only as the ledger seed.
-15. **Accumulate response bodies as Buffers.** Per-chunk `toString('utf8')` splits multi-byte CJK characters; locate the header/body boundary with `buf.indexOf('\r\n\r\n')`.
+Set `QH_DEBUG=1` for server debug logs. Check logs for account information and local paths before sharing.
 
 ## License
 

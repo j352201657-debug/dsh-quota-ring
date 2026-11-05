@@ -1,23 +1,6 @@
 'use strict';
 
-/**
- * src/http.js
- * ----------------------------------------------------------------------------
- * 轻量 HTTPS/HTTP GET 工具。无第三方依赖，直接用 Node 内置 http/https 模块。
- *
- * 关键点：
- *   1. 代理支持（重要）：Node 的 http/https 模块**不会**读取 Windows 系统代理设置，
- *      也不自动读 HTTP_PROXY/HTTPS_PROXY 环境变量。在开了代理（常见于中国大陆
- *      访问 OpenAI/Gemini）的机器上，直连会一直挂起直到超时。
- *      因此本模块自行探测代理并建立 CONNECT 隧道：
- *        优先级：插件配置 proxy → 环境变量 HTTPS_PROXY/HTTP_PROXY
- *                → Windows 注册表系统代理 → 直连
- *   2. 超时：使用显式定时器（而非 socket 空闲超时），保证「连接建立但无响应」
- *      的情况也能按时失败。
- *   3. 限制响应体大小，防止异常响应撑爆内存。
- *   4. 非 2xx 状态码按错误抛出，附带状态码与响应片段，便于错误展示。
- * ----------------------------------------------------------------------------
- */
+/** HTTP/HTTPS 请求、代理探测、连接超时与 JSON 响应解析。 */
 
 const http = require('http');
 const https = require('https');
@@ -72,15 +55,16 @@ function parseProxy(raw) {
   const s = raw.trim();
   if (!s) return null;
   try {
-    const u = new URL(/^https?:\/\//i.test(s) ? s : 'http://' + s);
+    const u = new URL(s.includes('://') ? s : 'http://' + s);
+    if (!['http:', 'https:'].includes(u.protocol)) return null;
     const host = u.hostname;
-    const port = Number(u.port) || 80;
+    const port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
     if (!host) return null;
     let auth = null;
     if (u.username) {
       auth = decodeURIComponent(u.username) + ':' + decodeURIComponent(u.password || '');
     }
-    return { host, port, auth };
+    return { host, port, auth, protocol: u.protocol };
   } catch (e) {
     return null;
   }
@@ -132,92 +116,113 @@ function resolveProxy(targetHost, opts = {}) {
  * @param {string} [method] HTTP 方法，默认 GET
  * @param {Buffer} [bodyBuf] 请求体（POST 时使用）
  */
-function requestViaProxy(target, proxy, headers, method, bodyBuf) {
+function requestViaProxy(target, proxy, headers, method, bodyBuf, timeoutMs) {
   return new Promise((resolve, reject) => {
+    let connectReq;
+    let tlsSocket;
+    let tunnel;
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (connectReq) connectReq.destroy();
+      if (tlsSocket) tlsSocket.destroy();
+      if (tunnel) tunnel.destroy();
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const timer = setTimeout(() => finish(new Error('请求超时')), timeoutMs);
     const verb = method || 'GET';
-    const proxyAuthHeaders = proxy.auth
-      ? { 'Proxy-Authorization': 'Basic ' + Buffer.from(proxy.auth).toString('base64') }
-      : {};
+    try {
+      const proxyAuthHeaders = proxy.auth
+        ? { 'Proxy-Authorization': 'Basic ' + Buffer.from(proxy.auth).toString('base64') }
+        : {};
 
-    const connectReq = http.request({
-      host: proxy.host,
-      port: proxy.port,
-      method: 'CONNECT',
-      path: `${target.hostname}:${target.port || 443}`,
-      headers: { Host: `${target.hostname}:${target.port || 443}`, ...proxyAuthHeaders },
-      timeout: 15000,
-    });
+      const transport = proxy.protocol === 'https:' ? https : http;
+      connectReq = transport.request({
+        host: proxy.host,
+        port: proxy.port,
+        method: 'CONNECT',
+        path: `${target.hostname}:${target.port || 443}`,
+        headers: { Host: `${target.hostname}:${target.port || 443}`, ...proxyAuthHeaders },
 
-    connectReq.on('connect', (res, socket) => {
-      if (res.statusCode !== 200) {
-        socket.destroy();
-        reject(new Error(`代理 CONNECT 失败：HTTP ${res.statusCode}`));
-        return;
-      }
-      // 在隧道上建立 TLS 连接
-      const tlsSocket = tls.connect(
-        { socket, servername: target.hostname, ALPNProtocols: ['http/1.1'] },
-        () => {
-          // TLS 就绪后手动写 HTTP/1.1 请求
-          const path = (target.pathname || '/') + (target.search || '');
-          const allHeaders = {
-            Host: target.hostname,
-            ...headers,
-            Connection: 'close',
-          };
-          if (bodyBuf) allHeaders['Content-Length'] = bodyBuf.length;
-          const headerLines = Object.entries(allHeaders)
-            .map(([k, v]) => `${k}: ${v}`)
-            .join('\r\n');
-          tlsSocket.write(Buffer.concat([
-            Buffer.from(`${verb} ${path} HTTP/1.1\r\n${headerLines}\r\n\r\n`, 'utf8'),
-            bodyBuf || Buffer.alloc(0),
-          ]));
-        }
-      );
-
-      // 必须按 Buffer 累积：逐块 toString('utf8') 会把跨块的多字节字符切成乱码，
-      // 而 agy 的额度响应里带中文字段的 description 就属于这种情况。
-      const chunks = [];
-      let total = 0;
-      tlsSocket.on('data', (chunk) => {
-        chunks.push(chunk);
-        total += chunk.length;
-        if (total > MAX_BODY_BYTES) {
-          tlsSocket.destroy(new Error('响应体过大，已中断'));
-        }
       });
-      tlsSocket.on('end', () => {
-        try {
-          const buf = Buffer.concat(chunks);
-          // 先按 latin1 定位头部分隔符，避免二进制体里恰好出现 \r\n\r\n 造成误判
-          const sepBuf = buf.indexOf('\r\n\r\n');
-          if (sepBuf < 0) throw new Error('响应格式异常');
-          const head = buf.slice(0, sepBuf).toString('utf8');
-          const bodyBufRes = buf.slice(sepBuf + 4);
-          const lines = head.split('\r\n');
-          const statusLine = lines[0] || '';
-          const statusCode = Number((statusLine.match(/HTTP\/\d\.\d (\d+)/) || [])[1]) || 0;
-          const respHeaders = {};
-          for (const line of lines.slice(1)) {
-            const i = line.indexOf(':');
-            if (i > 0) respHeaders[line.slice(0, i).toLowerCase()] = line.slice(i + 1).trim();
+
+      connectReq.on('connect', (res, socket) => {
+        tunnel = socket;
+        socket.on('error', (error) => finish(error));
+        if (settled) { socket.destroy(); return; }
+        if (res.statusCode !== 200) {
+          socket.destroy();
+          finish(new Error(`代理 CONNECT 失败：HTTP ${res.statusCode}`));
+          return;
+        }
+        // 在隧道上建立 TLS 连接
+        tlsSocket = tls.connect(
+          { socket, servername: target.hostname, ALPNProtocols: ['http/1.1'] },
+          () => {
+            // TLS 就绪后手动写 HTTP/1.1 请求
+            const path = (target.pathname || '/') + (target.search || '');
+            const allHeaders = {
+              Host: target.host,
+              ...headers,
+              Connection: 'close',
+            };
+            if (bodyBuf) allHeaders['Content-Length'] = bodyBuf.length;
+            const headerLines = Object.entries(allHeaders)
+              .map(([k, v]) => `${k}: ${v}`)
+              .join('\r\n');
+            tlsSocket.write(Buffer.concat([
+              Buffer.from(`${verb} ${path} HTTP/1.1\r\n${headerLines}\r\n\r\n`, 'utf8'),
+              bodyBuf || Buffer.alloc(0),
+            ]));
           }
-          // 处理 chunked 编码
-          const body = /chunked/i.test(respHeaders['transfer-encoding'] || '')
-            ? decodeChunkedBuffer(bodyBufRes).toString('utf8')
-            : bodyBufRes.toString('utf8');
-          resolve({ statusCode, headers: respHeaders, body });
-        } catch (e) {
-          reject(e);
-        }
-      });
-      tlsSocket.on('error', reject);
-    });
+        );
 
-    connectReq.on('timeout', () => connectReq.destroy(new Error('代理连接超时')));
-    connectReq.on('error', reject);
-    connectReq.end();
+        // 必须按 Buffer 累积：逐块 toString('utf8') 会把跨块的多字节字符切成乱码，
+        // 而 agy 的额度响应里带中文字段的 description 就属于这种情况。
+        const chunks = [];
+        let total = 0;
+        tlsSocket.on('data', (chunk) => {
+          chunks.push(chunk);
+          total += chunk.length;
+          if (total > MAX_BODY_BYTES) {
+            finish(new Error('响应体过大，已中断'));
+          }
+        });
+        tlsSocket.on('end', () => {
+          try {
+            const buf = Buffer.concat(chunks);
+            // 先按 latin1 定位头部分隔符，避免二进制体里恰好出现 \r\n\r\n 造成误判
+            const sepBuf = buf.indexOf('\r\n\r\n');
+            if (sepBuf < 0) throw new Error('响应格式异常');
+            const head = buf.slice(0, sepBuf).toString('utf8');
+            const bodyBufRes = buf.slice(sepBuf + 4);
+            const lines = head.split('\r\n');
+            const statusLine = lines[0] || '';
+            const statusCode = Number((statusLine.match(/HTTP\/\d\.\d (\d+)/) || [])[1]) || 0;
+            const respHeaders = {};
+            for (const line of lines.slice(1)) {
+              const i = line.indexOf(':');
+              if (i > 0) respHeaders[line.slice(0, i).toLowerCase()] = line.slice(i + 1).trim();
+            }
+            // 处理 chunked 编码
+            const body = /chunked/i.test(respHeaders['transfer-encoding'] || '')
+              ? decodeChunkedBuffer(bodyBufRes).toString('utf8')
+              : bodyBufRes.toString('utf8');
+            finish(null, { statusCode, headers: respHeaders, body });
+          } catch (e) {
+            finish(e);
+          }
+        });
+        tlsSocket.on('error', (error) => finish(error));
+        tlsSocket.on('close', () => { if (!settled) finish(new Error('响应连接中断')); });
+      });
+
+      connectReq.on('error', (error) => finish(error));
+      connectReq.end();
+    } catch (error) { finish(error); }
   });
 }
 
@@ -242,48 +247,39 @@ function decodeChunkedBuffer(buf) {
 function requestDirect(urlObj, headers, timeoutMs, method, bodyBuf) {
   return new Promise((resolve, reject) => {
     const lib = urlObj.protocol === 'https:' ? https : http;
-    const verb = (method || 'GET').toUpperCase();
-
-    // 显式超时定时器：覆盖「连接建立但无响应」的情况
-    const timer = setTimeout(() => {
-      req.destroy(new Error('请求超时'));
-    }, timeoutMs);
-
-    const options = {
-      method: verb,
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'dsh-quota-ring/3.1.0',
-        ...headers,
-      },
-    };
-    if (bodyBuf) options.headers['Content-Length'] = bodyBuf.length;
-
-    const req = lib.request(urlObj, options, (res) => {
-      let body = '';
-      res.on('data', (chunk) => {
-        body += chunk;
-        if (body.length > MAX_BODY_BYTES) {
-          req.destroy(new Error('响应体过大，已中断'));
-        }
-      });
-      res.on('end', () => {
-        clearTimeout(timer);
-        resolve({ statusCode: res.statusCode || 0, headers: res.headers, body });
-      });
-      res.on('error', (e) => {
-        clearTimeout(timer);
-        reject(e);
-      });
-    });
-
-    req.on('error', (err) => {
+    let req;
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      reject(err);
-    });
-
-    if (bodyBuf) req.write(bodyBuf);
-    req.end();
+      if (error) {
+        if (req) req.destroy();
+        reject(error);
+      } else resolve(value);
+    };
+    const timer = setTimeout(() => finish(new Error('请求超时')), timeoutMs);
+    try {
+      const options = { method: (method || 'GET').toUpperCase(),
+        headers: { Accept: 'application/json', 'User-Agent': 'dsh-quota-ring/3.1.1', ...headers } };
+      if (bodyBuf) options.headers['Content-Length'] = bodyBuf.length;
+      req = lib.request(urlObj, options, (res) => {
+        const chunks = [];
+        let bytes = 0;
+        res.on('data', (chunk) => {
+          bytes += chunk.length;
+          if (bytes > MAX_BODY_BYTES) finish(new Error('响应体过大，已中断'));
+          else chunks.push(chunk);
+        });
+        res.on('end', () => finish(null, { statusCode: res.statusCode || 0,
+          headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+        res.on('aborted', () => finish(new Error('响应连接中断')));
+        res.on('error', (error) => finish(error));
+      });
+      req.on('error', (error) => finish(error));
+      if (bodyBuf) req.write(bodyBuf);
+      req.end();
+    } catch (error) { finish(error); }
   });
 }
 
@@ -301,32 +297,22 @@ async function requestRaw(url, opts = {}) {
 
   const proxy = resolveProxy(urlObj.hostname, opts);
 
-  // 带超时保护的请求执行
-  const withTimeout = (p) =>
-    Promise.race([
-      p,
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('请求超时')), timeoutMs + 500)
-      ),
-    ]);
-
   if (proxy && urlObj.protocol === 'https:') {
-    return withTimeout(
-      requestViaProxy(
+    return requestViaProxy(
         urlObj,
         proxy,
         {
           Accept: 'application/json',
-          'User-Agent': 'dsh-quota-ring/3.1.0',
+          'User-Agent': 'dsh-quota-ring/3.1.1',
           ...(bodyBuf ? { 'Content-Type': 'application/json' } : {}),
           ...headers,
         },
         method,
-        bodyBuf
-      )
+        bodyBuf,
+        timeoutMs
     );
   }
-  return withTimeout(requestDirect(urlObj, headers, timeoutMs, method, bodyBuf));
+  return requestDirect(urlObj, headers, timeoutMs, method, bodyBuf);
 }
 
 /**
@@ -347,10 +333,12 @@ async function httpGetJson(url, opts = {}) {
     try {
       return body ? JSON.parse(body) : null;
     } catch (e) {
-      throw new Error(`JSON 解析失败: ${e.message}`);
+      throw new Error('额度服务返回了无效的 JSON 数据');
     }
   }
-  throw new Error(`HTTP ${status}: ${String(body).slice(0, 200)}`);
+  const error = new Error('HTTP ' + status);
+  error.status = status;
+  throw error;
 }
 
 /**
@@ -369,13 +357,12 @@ async function httpPostJson(url, body, opts = {}) {
     try {
       return text ? JSON.parse(text) : null;
     } catch (e) {
-      throw new Error(`JSON 解析失败: ${e.message}`);
+      throw new Error('额度服务返回了无效的 JSON 数据');
     }
   }
-  // 把响应体一并抛出，调用方才能区分 401 / 429 等
-  const err = new Error(`HTTP ${status}: ${String(text).slice(0, 300)}`);
+  // 保留状态码供调用方区分鉴权失败与限流。
+  const err = new Error('HTTP ' + status);
   err.status = status;
-  err.body = text;
   throw err;
 }
 

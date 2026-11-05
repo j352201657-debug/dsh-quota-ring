@@ -1,18 +1,4 @@
-/**
- * client.js —— dsh-quota-ring 客户端（纯 DOM 悬浮圆环 + 额度卡片）
- * ----------------------------------------------------------------------------
- * 说明：
- *   - 不依赖 React / react-dom，直接用原生 DOM 构建，开箱即用、最稳。
- *   - 通过 window.__ModuleLoader__.load 注册客户端模块，宿主会调用 apply(ctx, config)。
- *   - 悬浮圆环固定在右下角：环形进度条显示「最紧的那个额度窗口还剩多少」，
- *     中心数字同义；点击展开/折叠额度详情卡片。
- *   - 卡片按平台列「剩余 / 已用 / 重置倒计时」，底部给出诚实的混合总览
- *     （DeepSeek 是钱，GPT/Gemini 是百分比 —— 绝不把百分比折算成钱）。
- *   - 后台定时轮询默认 10 分钟；手动刷新做防抖 + 最小间隔；
- *     页面隐藏/窗口失焦时降频（或按配置暂停），恢复可见后立即刷新。
- *   - 所有网络数据一律用 textContent 写入，杜绝 XSS（错误信息可能含响应片段）。
- * ----------------------------------------------------------------------------
- */
+/** 客户端入口：悬浮额度圆环、明细卡片和轮询交互。 */
 (function () {
   'use strict';
 
@@ -107,7 +93,7 @@
     if (diff <= 0) return '即将重置';
     const mins = Math.floor(diff / 60000);
     // 卡片里一行要塞下「标签 + 进度条 + 百分比 + 倒计时」，
-    // 所以这里用紧凑写法（时/分，不再写「小时」「分钟」）。
+    // 倒计时使用紧凑的时、分单位。
     if (mins < 60) return `${Math.max(1, mins)} 分后重置`;
     const hours = Math.floor(mins / 60);
     const restMin = mins % 60;
@@ -348,7 +334,7 @@
     refreshBtnEl.className = 'qh-btn';
     refreshBtnEl.type = 'button';
     refreshBtnEl.textContent = '刷新';
-    refreshBtnEl.title = '立即刷新（服务端强制绕过缓存）';
+    refreshBtnEl.title = '获取最新额度';
     refreshBtnEl.addEventListener('click', scheduleManualRefresh);
     const close = document.createElement('button');
     close.className = 'qh-btn qh-close';
@@ -470,7 +456,7 @@
       title.className = 'qh-group-title';
       title.textContent = g.label || '额度组';
       // 注意：g.description 是上游的大段英文说明，按「不上界面」的约定这里不渲染、
-      // 也不挂 tooltip——它对本机用户没有信息价值，只会变成悬停噪音。
+      // 也不挂 tooltip——仅展示额度组名称。
       box.appendChild(title);
 
       for (const w of g.windows || []) {
@@ -586,7 +572,7 @@
     return row;
   }
 
-  /** 生成单个平台条目（全部 textContent，杜绝 XSS） */
+  /** 生成单个平台条目（全部 textContent，使用 textContent 写入动态文本） */
   function renderProvider(provider) {
     const wrap = document.createElement('div');
     wrap.className = 'qh-provider';
@@ -670,21 +656,23 @@
 
   /**
    * 计算底部「总览」。
-   * 诚实原则：DeepSeek 是钱、GPT/Gemini 是百分比速率窗口，两者语义不同，
-   * 绝不用汇率把百分比折算成金额。所以这里分别给出两条独立结论。
+   * 金额余额与百分比速率窗口分别汇总。
+   * 百分比不参与金额折算。
    */
   function computeOverview(providers) {
     const okProviders = providers.filter((p) => p.status === 'ok');
 
     // 金额型：只有 DeepSeek，直接展示
-    const money = okProviders.filter((p) => p.kind === 'money' && Number.isFinite(Number(p.remaining)));
+    const money = okProviders.filter((p) => p.kind === 'money' && p.remaining !== null &&
+      p.remaining !== undefined && String(p.remaining).trim() !== '' && Number.isFinite(Number(p.remaining)));
 
     // 百分比型：找出「最紧的窗口」（剩余最少）
     let tightest = null;
     for (const p of okProviders) {
       if (p.kind !== 'percent') continue;
       for (const w of p.windows || []) {
-        if (w.unknown || !Number.isFinite(Number(w.remainingPercent))) continue;
+        if (w.unknown || w.remainingPercent === null || w.remainingPercent === undefined ||
+            String(w.remainingPercent).trim() === '' || !Number.isFinite(Number(w.remainingPercent))) continue;
         const r = Number(w.remainingPercent);
         if (!tightest || r < tightest.remainingPercent) {
           tightest = { provider: p.label, label: w.label, remainingPercent: r };

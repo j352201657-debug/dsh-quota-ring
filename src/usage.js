@@ -1,26 +1,6 @@
 'use strict';
 
-/**
- * src/usage.js
- * ----------------------------------------------------------------------------
- * DeepSeek「今日消耗」统计。
- *
- * 为什么需要自己记账：
- *   DeepSeek 的 ```get_user_summary``` 只给**当前余额**和**累计消费**，
- *   没有「今天花了多少」这种按天聚合的字段。官方网页版的日用量也是
- *   前端自己用余额差算出来的。所以唯一诚实的做法是：
- *     今日消耗 = 今日起始余额 + 今日充值 − 当前余额
- *
- * 我们自己按天记账：
- *   - 每次成功拿到余额就与上一次比较，余额**减少**记为消耗，
- *     余额**增加**记为充值（这样用户中途充值不会把消耗算成负数）；
- *   - 状态写在 `$DSH_HOME/dsh-quota-ring/usage-state.json`，DSH 重启后接着算；
- *   - 首次安装时，若 DSH 自己已经维护过一份 `.dshw-usage.json`（同一天），
- *     就用它当天已记录的消耗作为起点，避免"从此刻开始算"显得像没花钱。
- *
- * 日期边界用 UTC+8 的日历日（北京时间 / 新加坡时间同为 +8，无夏令时）。
- * ----------------------------------------------------------------------------
- */
+/** 按 UTC+8 日历日累计余额变化，将估算消耗和充值记录保存到本机。 */
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -49,7 +29,7 @@ function stateFilePath(homeDir) {
   return path.join(homeDir, STATE_DIR_NAME, STATE_FILE_NAME);
 }
 
-/** 读状态文件；不存在或损坏都当作空状态，绝不因为记账失败影响额度展示。 */
+/** 读状态文件；不存在或损坏都当作空状态，不因为记账失败影响额度展示。 */
 function loadState(homeDir) {
   try {
     const raw = fs.readFileSync(stateFilePath(homeDir), 'utf8');
@@ -80,7 +60,7 @@ function saveState(homeDir, state) {
  * 这个文件由 DSH 的账号额度跟踪维护，字段为
  *   { date, lastBalance, todayUsage, history, ... }
  * 它可能停止更新（例如对应机制被移除），所以只当作**起点**，
- * 之后完全由我们自己累加。读不到就返回 null，不影响主流程。
+ * 后续按余额观测累计。读取失败返回 null。
  */
 function readSeed(homeDir, todayKey) {
   try {
@@ -116,7 +96,7 @@ function observeBalance(params) {
   const homeDir = params && params.homeDir;
   const nowMs = Number.isFinite(params && params.nowMs) ? params.nowMs : Date.now();
 
-  // 记账是附加信息：任何一步失败都返回「本轮不展示」，绝不抛给调用方
+  // 记账是附加信息：任何一步失败都返回「本轮不展示」，不抛给调用方
   const empty = { today: null, currency, sinceMs: null, credits: 0, source: 'none', history: [] };
   if (!Number.isFinite(balance) || balance < 0 || !homeDir) return empty;
 
@@ -139,7 +119,7 @@ function observeBalance(params) {
       source: 'self',
       history,
     };
-    // 首次安装时尝试用 DSH 已有的日用量做起点，避免明明已经花了不少钱却显示 ¥0
+    // 首次安装时尝试用 DSH 已有的日用量做起点，补充本日已有记录
     const seed = readSeed(homeDir, today);
     if (seed) {
       state.debits = round4(seed.debits);

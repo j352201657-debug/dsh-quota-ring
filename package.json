@@ -1,6 +1,6 @@
 {
   "name": "dsh-quota-ring",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "统一聚合展示 DeepSeek / GPT(Codex) / Gemini 三家账号的额度状态：含 DeepSeek 峰谷时段与今日消耗、Gemini 三个额度池（DSH Web UI 插件，右下角悬浮圆环）",
   "license": "MIT",
   "author": "Chen Yang Ji <j352201657-debug@users.noreply.github.com>",
@@ -56,5 +56,8 @@
       "inject": [],
       "immediately": true
     }
+  },
+  "scripts": {
+    "test": "node selftest-v3.cjs"
   }
 }

@@ -1,30 +1,6 @@
 'use strict';
 
-/**
- * src/keyring.js
- * ----------------------------------------------------------------------------
- * 从 Windows 凭据管理器读取 Antigravity（Gemini）的 OAuth 访问令牌。
- *
- * 为什么需要它：
- *   DSH 的 `dsh-agy-cli` 插件把 antigravity 的额度**压平**成三个 family
- *   （google / anthropic / openai）之后才通过 `/plugins/agy-cli/status` 暴露。
- *   而 antigravity 的真实额度是**三个 group、五个 bucket**：
- *       Gemini Models      → gemini-weekly       + gemini-5h
- *       Claude and GPT     → 3p-weekly           + 3p-5h
- *       Gemini 4 Argon     → gemini-argon-wtu-weekly（只有周额度）
- *   压平时后出现的 group 会覆盖前面的，于是 Gemini Models 的 5 小时窗口
- *   在 /status 里变成了「未知」。要看全，只能自己请求原始接口。
- *
- * 安全边界（刻意为之）：
- *   - **只读**。本模块绝不刷新、绝不写回凭据。令牌续期始终由 agy-cli /
- *     agy.exe 负责，避免两套逻辑互相踩踏把用户踢下线。
- *   - 令牌只在内存中用于一次 HTTPS 请求，不落盘、不打印、不进日志。
- *   - 读取方式与 agy-cli 完全一致：PowerShell + advapi32!CredRead，
- *     target = `gemini:antigravity`，blob 是 base64 编码的 JSON。
- *
- * 非 Windows 平台直接返回 null，调用方回退到 `/status` 的压平数据。
- * ----------------------------------------------------------------------------
- */
+/** 读取 Windows 凭据管理器中的 Antigravity 访问令牌；非 Windows 返回空结果。 */
 
 const { execFile } = require('node:child_process');
 

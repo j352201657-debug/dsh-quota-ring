@@ -1,39 +1,6 @@
 'use strict';
 
-/**
- * src/adapters/agy.js
- * ----------------------------------------------------------------------------
- * Gemini 额度适配器 —— 百分比速率窗口。
- *
- * 【额度池的真实结构（2026-11 实测原始接口）】
- *   Antigravity 的额度不是"一个数"，而是**三个 group、五个 bucket**：
- *
- *     Gemini Models          每周 gemini-weekly   剩余 98.60%（5 天 2 小时后重置）
- *                            5 小时 gemini-5h     剩余 99.95%（3 小时 27 分钟后重置）
- *     Claude and GPT models  每周 3p-weekly       剩余 89.67%
- *                            5 小时 3p-5h         剩余 100%
- *     Gemini 4 Argon         每周 gemini-argon-wtu-weekly 剩余 98.59%（仅周额度）
- *
- * 【为什么不能只用 agy-cli 的 /status】
- *   dsh-agy-cli 把上面三个 group **压平**成 google / anthropic / openai 三个
- *   family 之后才暴露，而它的循环写法是「后出现的 group 覆盖前面的」：
- *   Gemini 4 Argon（只有周额度）会覆盖掉 Gemini Models 的 gemini-5h，
- *   于是 /status 里 google.fiveHourUnknown 恒为 true —— 这就是界面上
- *   「5 小时检测不到」的真正原因（额度本身一直在，是数据在传递中被丢了）。
- *
- * 【本适配器的策略】
- *   1. 首选：只读地拿 Windows 凭据 `gemini:antigravity` 的 access token，
- *      直接 POST 原始接口，按 group 完整渲染。（见 src/keyring.js，
- *      **只读不刷新**，续期始终归 agy-cli / agy.exe，避免两份登录态打架）
- *   2. 回退：原始接口不可用（无凭据 / 401 / 网络失败）时，退回
- *      `GET http://127.0.0.1:<DSH端口>/plugins/agy-cli/status`，
- *      至少把 google 与 anthropic 两个 family 展示出来。
- *
- * 【语义】
- *   remainingFraction 是 0..1 的「剩余比例」；缺字段表示上游没上报，
- *   必须显示「未知」而不是 1（100%）——否则已耗尽的账号会显示"满额度"。
- * ----------------------------------------------------------------------------
- */
+/** Antigravity 额度适配器：读取分组额度，失败时回退到 AGY 状态接口。 */
 
 const { httpGetJson, httpPostJson } = require('../http');
 const { makeResult, failResult, clamp, toResetAt } = require('../shape');
@@ -83,10 +50,10 @@ const WINDOW_LABEL = { '5h': '5 小时配额', weekly: '每周配额' };
  * @returns {number}
  */
 function resolvePort(config, runtime) {
-  const fromReq = Number(runtime && runtime.webPort);
-  if (Number.isFinite(fromReq) && fromReq > 0) return fromReq;
   const fromCfg = Number(config && config.dshWebPort);
-  if (Number.isFinite(fromCfg) && fromCfg > 0) return fromCfg;
+  if (Number.isInteger(fromCfg) && fromCfg > 0 && fromCfg <= 65535) return fromCfg;
+  const fromReq = Number(runtime && runtime.webPort);
+  if (Number.isInteger(fromReq) && fromReq > 0 && fromReq <= 65535) return fromReq;
   return 0; // 未知：跳过状态接口，直接走原始额度接口
 }
 
@@ -99,7 +66,8 @@ function resolvePort(config, runtime) {
  * @returns {object}
  */
 function makeWindow(label, fraction, resetRaw, windowSeconds) {
-  const pct = fraction === null || fraction === undefined ? null : clamp(Number(fraction) * 100, 0, 100);
+  const normalized = clamp(fraction, 0, 1);
+  const pct = normalized === null ? null : normalized * 100;
   if (pct === null) {
     return {
       label,
@@ -164,7 +132,7 @@ function parseGroups(json) {
 
 /**
  * 回退路径：把 agy-cli /status 压平后的 family 还原成"分组"形态。
- * 至少把 Gemini 与 Claude/GPT 两组都显示出来，不再只看 google。
+ * 显示状态接口中可用的 Gemini 与 Claude/GPT 额度组。
  */
 function groupsFromStatus(quotas) {
   const out = [];
@@ -285,7 +253,7 @@ async function fetch(credentials, config, runtime) {
       status = await httpGetJson(`http://127.0.0.1:${port}/plugins/agy-cli/status`, {
         headers: { accept: 'application/json' },
         timeoutMs: Math.min(config.requestTimeoutMs, 15000),
-        // 本机回环，绝不需要代理
+        // 本机回环，不需要代理
         proxy: '',
       });
     } catch (e) {
@@ -307,7 +275,7 @@ async function fetch(credentials, config, runtime) {
         ID,
         LABEL,
         'error',
-        'Gemini 登录已过期，请在终端执行一次 agy 重新登录（或到 agy-cli 插件里重新授权）',
+        'Gemini 登录已过期，请在 AGY 插件中重新授权',
         { kind: 'percent', account, ms: Date.now() - t0 }
       );
     }
@@ -349,7 +317,7 @@ async function fetch(credentials, config, runtime) {
         ID,
         LABEL,
         'unavailable',
-        '未检测到 dsh-agy-cli 插件（Gemini 额度由它提供），可先安装/启用该插件',
+        'Gemini 额度接口不可用，请检查 dsh-agy-cli 是否已安装并启用',
         { kind: 'percent', ms: Date.now() - t0 }
       );
     }
@@ -358,7 +326,7 @@ async function fetch(credentials, config, runtime) {
         ID,
         LABEL,
         'error',
-        `连接本机 ${port} 端口被拒绝，且原始额度接口也不可用；请确认 DSH Web 服务端口`,
+        '无法连接 Gemini 额度服务，请检查 DSH 服务和网络设置',
         { kind: 'percent', notes, ms: Date.now() - t0 }
       );
     }

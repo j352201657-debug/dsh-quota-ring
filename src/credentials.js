@@ -1,31 +1,6 @@
 'use strict';
 
-/**
- * src/credentials.js
- * ----------------------------------------------------------------------------
- * 凭据读取（v2：账号 OAuth 凭据，不再是 API Key）。
- *
- * 【为什么重写】
- * 三家平台在 DSH 里都不是「填一个 API Key 去查钱」，而是**账号登录态**：
- *   - DeepSeek：DSH「DeepSeek 账号」插件登录后，凭据存在 .credentials.yaml 的
- *               records["deepseek-account-platform/default"].payload.{token,issuer}
- *   - GPT     ：DSH「Codex 订阅」插件登录后，凭据存在
- *               records["codex-subscription/accounts"].payload.accounts[].credential
- *               （OAuth access / refresh / expires / accountId / email）
- *   - Gemini  ：凭据在 dsh-agy-cli 里（Windows 凭据管理器 gemini:antigravity），
- *               本插件不直接读它，而是调用 agy-cli 已缓存的 HTTP 路由，故这里不需要凭据。
- *
- * 【安全】
- *   - 只读取，绝不写入、绝不打印密文；返回结构里不含「用于日志」的字段。
- *   - 任何解析异常都被吞掉并转成 { ok:false, error }，不影响其他两家。
- *
- * 【踩坑记录（务必保留）】
- *   DeepSeek 的 token 是 base64 风格，**含 `/` 和 `+`**。如果像 v1 那样用
- *   `[A-Za-z0-9._-]` 这种字符集去截取，会在第 25 个字符处断掉，服务端返回
- *   {"code":40003,"msg":"Authorization Failed (invalid token)"}。
- *   因此本文件取「整行冒号后的全部内容」，不做字符集裁剪。
- * ----------------------------------------------------------------------------
- */
+/** 读取 DSH 账号凭据。保留完整令牌字符，不修改凭据文件。 */
 
 const fs = require('fs');
 const path = require('path');
@@ -36,17 +11,7 @@ function escapeRe(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * 从「插件自身的安装位置」反推 DSH 数据目录。
- *
- * 插件总是装在 `<DSH_HOME>/profiles/<profile>/node_modules/dsh-quota-ring/`，
- * 所以从 __dirname 逐级向上找，哪一级里存在 `.credentials.yaml`，哪一级就是
- * DSH 数据目录。这一条与机器无关，是本文件最重要的跨机器兜底：
- * 用户的数据目录叫 `D:\DSHData\.dsh` 也好、`~/.dsh` 也好、`D:\其他\.dsh` 也好，
- * 只要插件是被正常安装进 profile 的，就一定找得到。
- *
- * @returns {string[]} 由近及远的祖先目录（只保留「看起来像 DSH 数据目录」的）
- */
+/** 从插件安装目录向上查找 DSH 数据目录。 */
 function homesFromInstallPath() {
   const out = [];
   let dir = __dirname;
@@ -69,8 +34,8 @@ function homesFromInstallPath() {
 /**
  * 候选的 DSH 数据目录（按优先级）。
  *
- * 顺序：显式配置 → 环境变量 → **插件安装路径反推** → 历史默认位置 → 家目录约定。
- * 中间那条与机器无关，是「换一台电脑也能用」的关键。
+ * 顺序：显式配置 → 环境变量 → **插件安装路径反推** → 家目录约定。
+ * 安装目录探测适用于自定义数据目录。
  *
  * @param {object} config 归一化配置
  * @returns {string[]}
@@ -83,8 +48,6 @@ function candidateHomes(config) {
   if (process.env.DSH_DATA_DIR) list.push(process.env.DSH_DATA_DIR);
   // 由插件自身的安装位置反推（跨机器可靠）
   list.push(...homesFromInstallPath());
-  // 历史默认位置（某些发行版把数据放到固定盘符）
-  list.push('D:\\DSHData\\.dsh');
   // 通用约定
   try {
     list.push(path.join(os.homedir(), '.dsh'));
@@ -248,7 +211,7 @@ function readDeepSeekGrant(config) {
       ok: false,
       token: '',
       issuer: '',
-      error: '未找到 DSH 凭据文件 .credentials.yaml（已尝试：' + tried.join(' / ') + '）',
+      error: '未找到 DSH 登录凭据，请先登录或检查 dshHome 配置',
     };
   }
 
@@ -327,7 +290,7 @@ function readCodexCredential(config) {
 
   const { file, tried } = locateCredentialsFile(config);
   if (!file) {
-    return { ...empty, error: '未找到 DSH 凭据文件 .credentials.yaml（已尝试：' + tried.join(' / ') + '）' };
+    return { ...empty, error: '未找到 DSH 登录凭据，请先登录或检查 dshHome 配置' };
   }
 
   let text;

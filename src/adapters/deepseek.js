@@ -1,34 +1,6 @@
 'use strict';
 
-/**
- * src/adapters/deepseek.js
- * ----------------------------------------------------------------------------
- * DeepSeek 额度适配器（真金额，可同时给出「剩余」与「已用」）。
- *
- * 【DSH 内置实现来源】
- *   DSH 的 dsh-deepseek-account-platform 插件里，balance 查询定义在
- *   queries.balance = { path: '/api/v0/users/get_user_summary', ... }，
- *   鉴权方式是请求头 x-dsh-auth-token 带上账号 grant 的 token，
- *   并且 grant 的 issuer 必须与 platformOrigin 一致。
- *
- * 【实测响应】（2026-11 本机）
- *   GET https://platform.deepseek.com/api/v0/users/get_user_summary
- *   header: x-dsh-auth-token: <64 字符 token>
- *   → 200
- *   { code:0, data:{ biz_data:{
- *       normal_wallets:[{currency:'USD',balance:'0E-16'},{currency:'CNY',balance:'17.4171...'}],
- *       bonus_wallets :[{currency:'USD',balance:'0'}],
- *       total_costs   :[{currency:'USD',amount:'0E-16'},{currency:'CNY',amount:'168.5869...'}]
- *   }}}
- *
- *   语义映射：
- *     normal_wallets → 充值余额（剩余）
- *     bonus_wallets  → 赠送余额（剩余，一般为 0）
- *     total_costs    → 累计消费（已用）★ 这是三家唯一能给出「已用金额」的平台
- *
- * 【注意】balance 里会出现 "0E-16" 这种科学计数法字符串，parseFloat 能正确读成 0。
- * ----------------------------------------------------------------------------
- */
+/** DeepSeek 额度适配器：读取余额和累计消费，附加时段与消耗估算。 */
 
 const { httpGetJson } = require('../http');
 const { makeResult, failResult } = require('../shape');
@@ -82,7 +54,7 @@ async function fetch(credentials, config) {
   try {
     json = await httpGetJson(url, {
       headers: {
-        // ★ 不是 Authorization: Bearer，DSH 用的是自定义头 x-dsh-auth-token
+        // 不是 Authorization: Bearer，DSH 用的是自定义头 x-dsh-auth-token
         'x-dsh-auth-token': grant.token,
         accept: 'application/json',
       },
@@ -121,7 +93,7 @@ async function fetch(credentials, config) {
   const bonusWallets = Array.isArray(biz.bonus_wallets) ? biz.bonus_wallets : [];
   const totalCosts = Array.isArray(biz.total_costs) ? biz.total_costs : [];
 
-  // 主币种选择：优先 CNY（本机账号是人民币账户），否则取出现的第一个币种
+  // 主币种选择：优先 CNY（默认展示币种），否则取出现的第一个币种
   const seen = [
     ...new Set(
       normalWallets

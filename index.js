@@ -1,28 +1,6 @@
 'use strict';
 
-/**
- * index.js —— dsh-quota-ring 服务端入口（CommonJS，参考 dsh-plugin-agy-quota 模板）
- * ----------------------------------------------------------------------------
- * 职责：
- *   1. 向 cordis 注册一个 webServer 前缀路由 /api/quota-hub。
- *   2. 提供三个端点：
- *        GET  /api/quota-hub/summary?force=1   聚合三家额度（带服务端缓存）
- *        GET  /api/quota-hub/config            脱敏配置（供客户端初始化）
- *        POST /api/quota-hub/refresh           强制刷新（等价 summary?force=1）
- *        GET  /api/quota-hub/diag              自检：凭据文件、账号记录、依赖插件
- *   3. 处理 CORS 与 OPTIONS 预检（回环地址白名单）。
- *
- * 生命周期：ctx.inject(['webServer'], ...) 内用 webCtx.effect 注册，
- *   effect 的返回值为清理函数，插件卸载时自动注销路由。这是 DSH 插件的
- *   标准生命周期规范（与 dsh-restart-now / dsh-plugin-agy-quota 一致）。
- *
- * 【端口自适应】
- *   Gemini 额度要读 dsh-agy-cli 的 /plugins/agy-cli/status，而 agy-cli 与本插件
- *   挂在**同一个** webServer 上。所以从请求的 Host 头即可得到真实端口
- *   （形如 `Host: 127.0.0.1:<port>`），无需在配置里写死端口——
- *   DSH 每次重启都可能换端口，写死会在别人机器上直接失效。
- * ----------------------------------------------------------------------------
- */
+/** 服务端入口：注册额度查询、配置和诊断路由。 */
 
 const { normalizeConfig, sanitizeConfig } = require('./src/config');
 const { resolveCredentials } = require('./src/credentials');
@@ -42,10 +20,8 @@ const plugin = {
 
     ctx.inject(['webServer'], (webCtx) => {
       webCtx.effect(() => {
-        // 解析账号凭据（读 DSH 的 .credentials.yaml）
-        const credentials = resolveCredentials(config);
-        // 创建聚合器（并发 + 缓存 + 降级）
-        const aggregator = createAggregator(config, credentials);
+        // 每次实际查询重新读取凭据，并合并并发请求。
+        const aggregator = createAggregator(config, () => resolveCredentials(config));
 
         // 注册前缀路由；返回清理函数（disposer）
         const disposer = webCtx.webServer.register({

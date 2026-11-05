@@ -1,19 +1,6 @@
 'use strict';
 
-/**
- * src/diag.js —— 自检（给别人装、换电脑时第一个要看的东西）
- * ----------------------------------------------------------------------------
- * 目标：让「装上去不显示额度」这件事可以自己查清楚，而不是让人猜。
- *
- * 只做三件事，全部是本地读取，不发起任何网络请求：
- *   1. 凭据文件找没找到、找过哪些路径；
- *   2. 两家的账号记录解析出来了吗（只报「有/没有」，绝不回显密文）；
- *   3. 依赖的两个 DSH 插件装没装、版本是多少。
- *
- * 输出直接对应 README 的排查表，前端与 curl 都可用：
- *   GET /api/quota-hub/diag
- * ----------------------------------------------------------------------------
- */
+/** 本地诊断：凭据位置、记录解析结果及依赖插件版本。 */
 
 const fs = require('fs');
 const path = require('path');
@@ -26,12 +13,12 @@ const REQUIRED_PLUGINS = [
   {
     name: 'dsh-codex-subscription',
     provides: 'GPT (Codex) 额度',
-    missingTip: '未安装 dsh-codex-subscription：GPT 那一行会显示「未登录」。安装并登录后即可取到 5 小时 / 每周窗口。',
+    missingTip: '未安装 dsh-codex-subscription，请安装并登录 Codex 账号。',
   },
   {
     name: 'dsh-agy-cli',
     provides: 'Gemini（Antigravity）额度',
-    missingTip: '未安装 dsh-agy-cli：Gemini 那一行会显示「不可用」。安装并在终端执行一次 agy 登录后即可取到三个额度池。',
+    missingTip: '未安装 dsh-agy-cli，请安装并授权 Antigravity 账号。',
   },
 ];
 
@@ -130,7 +117,7 @@ function buildDiag({ config, webPort }) {
     };
   });
 
-  // 平台能力差异（诚实说明，免得在别的系统上以为插件坏了）
+  // 平台能力差异（用于诊断不同系统的可用能力）
   const platforms = {
     platform: process.platform,
     arch: process.arch,
@@ -145,7 +132,7 @@ function buildDiag({ config, webPort }) {
 
   const tips = [];
   if (!file) {
-    tips.push('没有找到 .credentials.yaml。请在 DSH 里至少登录一家账号，或用 config.dshHome 显式指定 DSH 数据目录。');
+    tips.push('未找到 .credentials.yaml，请检查 DSH 登录状态或 dshHome 配置。');
   }
   if (!deepseek.ok) tips.push(deepseek.error || 'DeepSeek 账号记录不可用');
   if (!codex.ok) tips.push(codex.error || 'Codex 订阅记录不可用');

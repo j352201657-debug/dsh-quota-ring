@@ -1,30 +1,6 @@
 'use strict';
 
-/**
- * src/adapters/codex.js
- * ----------------------------------------------------------------------------
- * GPT（ChatGPT / Codex 订阅）额度适配器 —— 百分比速率窗口。
- *
- * 【DSH 内置实现来源】
- *   dsh-codex-subscription 插件：
- *     CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
- *     请求头：authorization: Bearer <oauth access> + chatgpt-account-id: <accountId>
- *     解析函数 parseCodexUsage() 会把 primary_window / secondary_window 归一成
- *     { usedPercent, remainingPercent, windowSeconds, resetsAt }。
- *
- * 【实测响应】（2026-11 本机，plan_type=plus）
- *   { plan_type:'plus',
- *     rate_limit:{ primary_window:  {used_percent:40, limit_window_seconds:18000,  reset_after_seconds:12073,  reset_at:1793894402},
- *                  secondary_window:{used_percent:6,  limit_window_seconds:604800, reset_after_seconds:598873, reset_at:1794481202} },
- *     credits:{has_credits:false, unlimited:false, balance:'0'} }
- *
- *   语义：primary_window = 5 小时滚动窗口；secondary_window = 每周窗口。
- *   used_percent 是「已用百分比」，剩余 = 100 - used_percent。
- *
- * 【注意】这里没有「钱」。Codex 订阅是额度制，credits.balance 在无购买时恒为 0，
- * 不要把它当成余额展示，只在附注里说明。
- * ----------------------------------------------------------------------------
- */
+/** Codex 额度适配器：读取订阅账号的速率窗口。 */
 
 const { httpGetJson } = require('../http');
 const { makeResult, failResult, clamp, toResetAt } = require('../shape');
@@ -99,10 +75,10 @@ async function fetch(credentials, config) {
     json = await httpGetJson(USAGE_URL, {
       headers: {
         authorization: 'Bearer ' + cred.access,
-        // ★ 必须带 chatgpt-account-id，否则 chatgpt.com 会 403 / 返回错账号
+        // 必须带 chatgpt-account-id，否则 chatgpt.com 会 403 / 返回错账号
         'chatgpt-account-id': cred.accountId,
         accept: 'application/json',
-        'user-agent': 'dsh-quota-ring/2.0.0',
+        'user-agent': 'dsh-quota-ring/3.1.1',
       },
       timeoutMs: config.requestTimeoutMs,
       proxy: config.proxy,
@@ -151,7 +127,7 @@ async function fetch(credentials, config) {
     });
   }
 
-  // 汇总值取「剩余最少」的窗口 —— 这是用户最需要警惕的那个
+  // 汇总值取「剩余最少」的窗口 —— 用于额度总览
   const worst = windows.reduce((a, b) => (a.remainingPercent <= b.remainingPercent ? a : b));
 
   // ---- 5. 附注 ----

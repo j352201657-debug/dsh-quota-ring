@@ -1,11 +1,5 @@
 'use strict';
-/**
- * 生成离线预览页面：用真实的服务端数据渲染客户端卡片，
- * 便于在没有重启 DSH 的情况下检查布局（峰谷条 / 今日消耗 / Gemini 三组）。
- *
- * 这个文件只用于开发自查，不参与运行时。它会把真实数据内联进 HTML，
- * 因此**必须脱敏**（账号邮箱、可能的 token 片段），否则截图不能公开。
- */
+/** 生成独立预览页面。生成文件包含本机额度数据，发布前应检查内容。 */
 const path = require('node:path');
 const fs = require('node:fs');
 const ROOT = path.join(__dirname, '..');
@@ -48,9 +42,9 @@ function maskSummary(summary) {
 </style>
 </head>
 <body>
-<div class="tip">dsh-quota-ring 离线预览（真实服务端数据，已脱敏，fetch 已被替换）</div>
+<div class="tip">额度卡片预览</div>
 <script>
-  window.__QH_SUMMARY__ = ${JSON.stringify(summary)};
+  window.__QH_SUMMARY__ = ${JSON.stringify(summary).replace(/</g, '\\u003c')};
   window.__QH_CONFIG__ = ${JSON.stringify(sanitizeConfig(config))};
   // 桩：把 /api/quota-hub/* 请求换成上面预置的数据
   window.fetch = function (url) {

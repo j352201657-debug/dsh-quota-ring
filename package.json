@@ -1,0 +1,60 @@
+{
+  "name": "dsh-quota-ring",
+  "version": "3.1.0",
+  "description": "统一聚合展示 DeepSeek / GPT(Codex) / Gemini 三家账号的额度状态：含 DeepSeek 峰谷时段与今日消耗、Gemini 三个额度池（DSH Web UI 插件，右下角悬浮圆环）",
+  "license": "MIT",
+  "author": "Chen Yang Ji <j352201657-debug@users.noreply.github.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/j352201657-debug/dsh-quota-ring.git"
+  },
+  "homepage": "https://github.com/j352201657-debug/dsh-quota-ring#readme",
+  "bugs": {
+    "url": "https://github.com/j352201657-debug/dsh-quota-ring/issues"
+  },
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "src",
+    "README.md",
+    "README.en.md",
+    "preview/card-final.png",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "quota",
+    "balance",
+    "deepseek",
+    "codex",
+    "chatgpt",
+    "gemini",
+    "antigravity"
+  ],
+  "engines": {
+    "node": ">=18",
+    "dsh": ">=0.2.0-rc.1 <0.3.0-0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [],
+      "immediately": true
+    }
+  }
+}

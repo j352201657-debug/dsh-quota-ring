@@ -1,0 +1,6 @@
+# 统一换行：仓库内存 LF，检出不看平台（Windows 上也不会变成 CRLF 提交）
+* text=auto eol=lf
+
+# 二进制
+*.png binary
+*.tgz binary

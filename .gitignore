@@ -1,0 +1,7 @@
+node_modules/
+*.bak
+*.bak-*
+usage-state.json
+preview/preview.html
+.DS_Store
+Thumbs.db

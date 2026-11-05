@@ -1,0 +1,61 @@
+# ============================================================================
+# dsh-quota-ring 插件注册补丁
+# ----------------------------------------------------------------------------
+# 本文件通过 package.json 的 dsh.bundle.patch 被 DSH 插件系统应用，
+# 向当前 profile 的 cordis 插件列表「插入」本插件条目。
+#
+# 注意：这里的 config 是插件启动时的完整默认配置（新插入插件不存在「合并
+# 旧配置」的问题，所以请把全部字段写全）。插件内部 src/config.js 仍会做
+# 深合并兜底，因此即便此处只写了部分字段，也能安全运行。
+# ============================================================================
+
+- insert:
+    - id: quota-hub
+      name: 'dsh-quota-ring'
+      config:
+        # 【客户端轮询周期】单位毫秒，默认 600000 = 10 分钟
+        refreshIntervalMs: 600000
+
+        # 【失焦降频倍数】页面隐藏/窗口失焦时，轮询周期 = refreshIntervalMs * idleMultiplier
+        idleMultiplier: 3
+
+        # 【失焦是否暂停】true = 页面隐藏时暂停轮询（恢复可见后立即刷一次）；
+        # false = 仅降频（周期拉长），不暂停
+        pauseWhenHidden: false
+
+        # 【DSH 用户数据目录】存放 .credentials.yaml 的目录。
+        # 留空则自动探测：DSH_HOME / DSH_DATA_DIR → 从插件安装路径反推
+        # → D:\DSHData\.dsh（历史默认位置）→ ~/.dsh。换电脑一般不用填。
+        dshHome: ''
+
+        # 【DSH Web 端口】用于访问 dsh-agy-cli 的 /plugins/agy-cli/status。
+        # 留空 / 0 = 从当前请求的 Host 头自动推断（推荐，端口变化无需改配置）
+        dshWebPort: 0
+
+        # 【代理】chatgpt.com / platform.deepseek.com 在部分网络下必须走代理，
+        # 否则请求会挂到超时。留空则自动探测：环境变量 HTTPS_PROXY/HTTP_PROXY
+        # → Windows 系统代理 → 直连。例：'http://127.0.0.1:12450'
+        proxy: ''
+
+        # 【服务端聚合缓存】单位毫秒，同一份 summary 在 TTL 内不重复请求上游
+        serverCacheTtlMs: 60000
+
+        # 【单家请求超时】单位毫秒，超过即判定该家失败并隔离，不影响其他家
+        requestTimeoutMs: 15000
+
+        # 【CORS 允许来源白名单】本地回环地址，供非同源场景兜底
+        corsOrigins:
+          - 'http://127.0.0.1'
+          - 'http://localhost'
+
+        # 【DeepSeek 峰时段窗口】UTC 小时，半开区间 [start, end)。
+        # 留空（null）= 使用内置官方值，即北京时间 09:00–12:00、14:00–18:00。
+        # 官方调价时在此填新值即可，无需改代码。例：
+        #   deepseekPeakWindows:
+        #     - { start: 1, end: 4 }
+        #     - { start: 6, end: 10 }
+        deepseekPeakWindows: null
+
+        # 【中国公众假期】全天按平价（谷价）计费，日期为北京时间日历日。
+        # 留空（null）= 使用内置的 2026 年安排；跨年后建议补上新一年的表。
+        deepseekPeakHolidays: null
